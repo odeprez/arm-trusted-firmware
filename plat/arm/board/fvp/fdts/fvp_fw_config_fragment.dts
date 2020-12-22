@@ -1,0 +1,5 @@
+stmm {
+	uuid = "eaba83d8-baaf-4eaf-8144-f7fdcbe544a7";
+	load-address = <0x7000000>;
+	owner = "SiP";
+};
