@@ -1,0 +1,12 @@
+{
+	"stmm" : {
+		"image": {
+			"file": "../Build/ArmVExpress-FVP-AArch64/DEBUG_GCC5/FV/BL32_AP_MM.fd"
+		},
+		"pm": {
+			"file": "plat/arm/board/fvp/fdts/fvp_stmm_config.dts"
+		},
+		"owner": "SiP",
+		"package": "tl_pkg"
+	}
+}
