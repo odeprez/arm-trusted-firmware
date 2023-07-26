@@ -1,0 +1,68 @@
+/*
+ * Copyright (c) 2024, Arm Limited. All rights reserved.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * This file is a Partition Manifest (PM) for a minimal Secure Partition (SP)
+ * that has additional optional properties defined.
+ */
+
+/dts-v1/;
+
+/ {
+	compatible = "arm,ffa-manifest-1.0";
+
+	/* Properties */
+	description = "stmm";
+	ffa-version = <0x00010002>; /* 31:16 - Major, 15:0 - Minor */
+	uuid = <0xd883baea 0xaf4eafba 0xfdf74481 0xa744e5cb>;
+	execution-ctx-count = <1>;
+	exception-level = <1>; /* S-EL0 */
+	execution-state = <0>; /* AARCH64 */
+	load-address = <0x0 0x7000000>;
+	entrypoint-offset = <0x3000>;
+	image-size = <0x0 0x300000>;
+	xlat-granule = <0>; /* 4KiB */
+	boot-order = <0>;
+	messaging-method = <0x603>; /* Supports direct message request/response. */
+
+	/* Boot protocol */
+	gp-register-num = <0x0>;
+
+	boot-info {
+		compatible = "arm,ffa-manifest-boot-info";
+		hob_list;
+	};
+
+	memory-regions {
+		compatible = "arm,ffa-manifest-memory-regions";
+/*
+		stmm_region {
+			description = "stmm_region";
+			load-address-relative-offset = <0x0>;
+			pages-count = <0x300>;
+			attributes = <0x3>;
+		};
+*/
+		rx-tx-buffers {
+			description = "shared-buff";
+			base-address = <0x0 0x7600000>;
+			pages-count = <0x10>;
+			attributes = <0x3>;
+		};
+
+		heap {
+			base-address = <0x0 0x7700000>;
+			description = "heap";
+			pages-count = <0x400>;
+			attributes = <0x3>;
+		};
+
+		ns_comm_buffer {
+			base-address = <0x0 0x80000000>;
+			description = "ns-comm";
+			pages-count = <0x10>;
+			attributes = <0xb>; /* NS read/write. */
+		};
+	};
+};
