@@ -487,6 +487,8 @@ FVP_TRUSTED_SRAM_SIZE == 512
 
 #define PLAT_SP_PRI			0x20
 
+#define PLAT_ARM_SP_MAX_SIZE		U(0x300000)
+
 /*
  * Physical and virtual address space limits for MMU in AARCH64 & AARCH32 modes
  */
