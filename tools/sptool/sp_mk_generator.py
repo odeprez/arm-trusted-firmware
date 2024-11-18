@@ -143,7 +143,6 @@ def get_load_address(sp_layout, sp, args :dict):
     load_address_parsed = re.search("(0x[0-9a-f]+)", load_address_lines[0])
     return load_address_parsed.group(0)
 
-
 @SpSetupActions.sp_action(global_action=True)
 def check_max_sps(sp_layout, _, args :dict):
     ''' Check validate the maximum number of SPs is respected. '''
@@ -158,23 +157,33 @@ def gen_fdt_sources(sp_layout, sp, args :dict):
     write_to_sp_mk_gen(f"FDT_SOURCES += {manifest_path}", args)
     return args
 
-@SpSetupActions.sp_action
-def gen_sptool_args(sp_layout, sp, args :dict):
-    ''' Generate Sp Pkgs rules. '''
-    sp_pkg = get_sp_pkg(sp, args)
-    sp_dtb_name = os.path.basename(get_file_from_layout(sp_layout[sp]["pm"]))[:-1] + "b"
-    sp_dtb = os.path.join(args["out_dir"], f"fdts/{sp_dtb_name}")
-    sp_img = get_sp_img_full_path(sp_layout[sp], args)
+def get_parition_pkg_type(sp_node):
+    '''
+        Return the specified Partition package.
+        Use sp_pkg for legacy SP Pkg.
+        Default to TL type of package.
+    '''
+    if type(sp_node) is not dict:
+        raise Exception(f"Invalid type for sp_node.")
 
-    # Do not generate rule if already there.
-    if is_line_in_sp_gen(f'{sp_pkg}:', args):
-        return args
-    write_to_sp_mk_gen(f"SP_PKGS += {sp_pkg}\n", args)
+    if not "package" in sp_node:
+        return "sp_pkg"
 
+    package_type = sp_node["package"]
+
+    if package_type == "tl_pkg" or package_type == "sp_pkg":
+        return package_type
+
+    print("WARNING: the type specified is Invalid")
+
+    return "sp_pkg"
+
+def generate_sp_pkg(sp_node, sp_pkg, sp_img, sp_dtb):
+    ''' Generates the rule in case SP is to be generated in an SP Pkg. '''
     sptool_args = f" -i {sp_img}:{sp_dtb}"
-    pm_offset = get_pm_offset(sp_layout[sp])
+    pm_offset = get_pm_offset(sp_node)
     sptool_args += f" --pm-offset {pm_offset}" if pm_offset is not None else ""
-    image_offset = get_image_offset(sp_layout[sp])
+    image_offset = get_image_offset(sp_node)
     sptool_args += f" --img-offset {image_offset}" if image_offset is not None else ""
     sptool_args += f" -o {sp_pkg}"
     sppkg_rule = f'''
@@ -182,7 +191,43 @@ def gen_sptool_args(sp_layout, sp, args :dict):
 \t$(Q)echo Generating {sp_pkg}
 \t$(Q)$(PYTHON) $(SPTOOL) {sptool_args}
 '''
-    write_to_sp_mk_gen(sppkg_rule, args)
+    return sppkg_rule
+
+def generate_tl_pkg(sp_node, sp_pkg, sp_img, sp_dtb):
+    tl_pkg_rule = f'''
+{sp_pkg}: {sp_dtb} {sp_img}
+\t$(Q)echo Generating {sp_pkg}
+\t$(Q)poetry run tlc create --size 1048576 --entry 257 {sp_dtb} {sp_pkg} --align 12
+\t$(Q)poetry run tlc add --entry 259 {sp_img} {sp_pkg}
+'''
+    return tl_pkg_rule
+
+@SpSetupActions.sp_action
+def gen_partition_pkg(sp_layout, sp, args :dict):
+    ''' Generate Sp Pkgs rules. '''
+    pkg = get_sp_pkg(sp, args)
+
+    sp_dtb_name = os.path.basename(get_file_from_layout(sp_layout[sp]["pm"]))[:-1] + "b"
+    sp_dtb = os.path.join(args["out_dir"], f"fdts/{sp_dtb_name}")
+    sp_img = get_sp_img_full_path(sp_layout[sp], args)
+
+    # Do not generate rule if already there.
+    if is_line_in_sp_gen(f'{pkg}:', args):
+        return args
+
+    # This should include all packages of all kinds.
+    write_to_sp_mk_gen(f"SP_PKGS += {pkg}\n", args)
+    package_type = get_parition_pkg_type(sp_layout[sp])
+    if package_type == "sp_pkg":
+        print("Requested a sp_pkg")
+        partition_pkg_rule = generate_sp_pkg(sp_layout[sp], pkg, sp_img, sp_dtb)
+    elif package_type == "tl_pkg":
+        print("Requested a tl_pkg")
+        partition_pkg_rule = generate_tl_pkg(sp_layout[sp], pkg, sp_img, sp_dtb)
+    else:
+        panic()
+
+    write_to_sp_mk_gen(partition_pkg_rule, args)
     return args
 
 @SpSetupActions.sp_action(global_action=True, exec_order=1)
@@ -193,6 +238,7 @@ def check_dualroot(sp_layout, _, args :dict):
     args["split"] =  int(MAX_SP / 2)
     owners = [sp_layout[sp].get("owner") for sp in sp_layout]
     args["plat_max_count"] = owners.count("Plat")
+
     # If it is owned by the platform owner, it is assigned to the SiP.
     args["sip_max_count"] = len(sp_layout.keys()) - args["plat_max_count"]
     if  args["sip_max_count"] > args["split"] or args["sip_max_count"] > args["split"]:
