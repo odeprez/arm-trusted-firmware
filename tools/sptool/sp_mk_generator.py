@@ -52,7 +52,11 @@ import os
 import re
 import sys
 import uuid
+import fdt
 from spactions import SpSetupActions
+import hob
+import struct
+from hob import HobList
 
 MAX_SP = 8
 UUID_LEN = 4
@@ -155,6 +159,27 @@ def gen_fdt_sources(sp_layout, sp, args :dict):
     ''' Generate FDT_SOURCES values for a given SP. '''
     manifest_path = get_sp_manifest_full_path(sp_layout[sp], args)
     write_to_sp_mk_gen(f"FDT_SOURCES += {manifest_path}", args)
+    return args
+
+@SpSetupActions.sp_action(exec_order=1)
+def generate_hob_list(sp_layout, sp, args: dict):
+    '''
+        Generates a hob file for the partition, if it requested it in its FF-A
+        manifest.
+    '''
+    with open(get_sp_manifest_full_path(sp_layout[sp], args), "r") as f:
+        sp_fdt = fdt.parse_dts(f.read())
+
+    if sp_fdt.exist_property('hob_list', '/boot-info'):
+        sp_hob_name = os.path.basename(sp + ".hob.bin")
+
+        # Add to the args so it can be consumed by the TL pkg function.
+        sp_layout[sp]["hob_path"] = sp_hob_name
+        hob_list = hob.generate_hob_from_fdt_node(sp_fdt)
+        with open(sp_hob_name, "wb") as h:
+            for block in hob_list.get_list():
+                h.write(block.pack())
+
     return args
 
 def get_parition_pkg_type(sp_node):
