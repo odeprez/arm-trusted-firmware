@@ -176,6 +176,7 @@ def generate_hob_list(sp_layout, sp, args: dict):
         # Add to the args so it can be consumed by the TL pkg function.
         sp_layout[sp]["hob_path"] = sp_hob_name
         hob_list = hob.generate_hob_from_fdt_node(sp_fdt)
+
         with open(sp_hob_name, "wb") as h:
             for block in hob_list.get_list():
                 h.write(block.pack())
@@ -218,11 +219,13 @@ def generate_sp_pkg(sp_node, sp_pkg, sp_img, sp_dtb):
 '''
     return sppkg_rule
 
-def generate_tl_pkg(sp_node, sp_pkg, sp_img, sp_dtb):
+def generate_tl_pkg(sp_node, sp_pkg, sp_img, sp_dtb, hob_path = None):
+    tlc_add_hob=f"\t$(Q)poetry run tlc add --entry 3 {hob_path} {sp_pkg}" if hob_path is not None else ""
     tl_pkg_rule = f'''
 {sp_pkg}: {sp_dtb} {sp_img}
 \t$(Q)echo Generating {sp_pkg}
-\t$(Q)poetry run tlc create --size 1048576 --entry 257 {sp_dtb} {sp_pkg} --align 12
+\t$(Q)poetry run tlc create --size 3145728 --entry 257 {sp_dtb} {sp_pkg} --align 12
+{tlc_add_hob}
 \t$(Q)poetry run tlc add --entry 259 {sp_img} {sp_pkg}
 '''
     return tl_pkg_rule
@@ -244,13 +247,14 @@ def gen_partition_pkg(sp_layout, sp, args :dict):
     write_to_sp_mk_gen(f"SP_PKGS += {pkg}\n", args)
     package_type = get_parition_pkg_type(sp_layout[sp])
     if package_type == "sp_pkg":
-        print("Requested a sp_pkg")
         partition_pkg_rule = generate_sp_pkg(sp_layout[sp], pkg, sp_img, sp_dtb)
     elif package_type == "tl_pkg":
-        print("Requested a tl_pkg")
-        partition_pkg_rule = generate_tl_pkg(sp_layout[sp], pkg, sp_img, sp_dtb)
+        # Conditionally provide the Hob.
+        hob_path = sp_layout[sp]["hob_path"] if sp_layout[sp].__contains__("hob_path") else None
+        partition_pkg_rule = generate_tl_pkg(
+                sp_layout[sp], pkg, sp_img, sp_dtb, hob_path)
     else:
-        panic()
+        raise Exception("Only SP Package and Transfer List Package supported")
 
     write_to_sp_mk_gen(partition_pkg_rule, args)
     return args
