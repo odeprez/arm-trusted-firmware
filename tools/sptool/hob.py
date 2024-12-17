@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import struct
+
 FFA_BOOT_INFO_HEADER_FMT_STR = "6IQ"
 FFA_BOOT_INFO_DESC_FMT_STR = "H2BHIQ"
 SIZEOF_BOOT_INFO_HEADER = struct.calcsize(FFA_BOOT_INFO_HEADER_FMT_STR)
@@ -41,6 +42,7 @@ MM_PEI_MMRAM_MEMORY_RESERVE_GUID = (0x0703f912, 0xbf8d, 0x4e2a, (0xbe,
     0x07, 0xab, 0x27, 0x25, 0x25, 0xc5, 0x92 ))
 MM_NS_BUFFER_GUID = (0xf00497e3, 0xbfa2, 0x41a1, (0x9d, 0x29, 0x54, 0xc2, 0xe9, 0x37,
      0x21, 0xc5 ))
+MM_COMM_BUFFER_GUID = (0x6c2a2520, 0x0131, 0x4aee, (0xa7, 0x50, 0xcc, 0x38, 0x4a, 0xac, 0xe8, 0xc6))
 
 # MMRAM states and capabilities
 # See UEFI Platform Initialization Specification Version 1.8, IV-5.3.5
@@ -72,7 +74,7 @@ EFI_BOOT_IN_RECOVERY_MODE = 0x20
 
 STMM_BOOT_MODE = EFI_BOOT_WITH_FULL_CONFIGURATION
 STMM_MMRAM_REGION_STATE_DEFAULT = EFI_CACHEABLE | EFI_ALLOCATED
-STMM_MMRAM_REGION_STATE_HEAP = EFI_CACHEABLE | EFI_ALLOCATED
+STMM_MMRAM_REGION_STATE_HEAP = EFI_CACHEABLE
 
 #helper for fdt nose property parsing
 def get_uint32_property_value(fdt_node, name):
@@ -186,7 +188,7 @@ class Firmware_Volume_Hob:
         self.header = Hob_Generic_Header(EFI_HOB_TYPE_FV, hob_length)
         self.format_str = self.header.format_str + self.data_format_str
         self.base_address = base_address
-        self.length = int(page_count << (PAGE_SIZE_SHIFT + granule << 1))
+        self.length = page_count
 
     def pack(self):
         return self.header.pack() + struct.pack(self.data_format_str,
@@ -201,15 +203,18 @@ class End_of_Hoblist_Hob:
         return self.header.pack()
 
 def generate_mmram_desc(base_addr, page_count, granule, region_state):
-    physical_size = page_count << (PAGE_SIZE_SHIFT + granule << 1)
+    physical_size = page_count << PAGE_SIZE_SHIFT
     physical_start = base_addr
     cpu_start = base_addr
 
-    return ("4Q", (physical_start, physical_size, cpu_start, \
+    return ("4Q", (physical_start, cpu_start, physical_size, \
         region_state))
 
 def generate_ns_buffer_guid(mmram_desc):
     return Hob_Guid(EFI_GUID(*MM_NS_BUFFER_GUID), *mmram_desc)
+
+def generate_shared_buf_guid(mmram_desc):
+    return Hob_Guid(EFI_GUID(*MM_COMM_BUFFER_GUID), *mmram_desc)
 
 def generate_pei_mmram_memory_reserve_guid(regions):
     #uint32t n_reserved regions, array of mmram descriptors
@@ -221,20 +226,14 @@ def generate_pei_mmram_memory_reserve_guid(regions):
     guid_data = (format_str, data)
     return Hob_Guid(EFI_GUID(*MM_PEI_MMRAM_MEMORY_RESERVE_GUID), *guid_data)
 
-def check_stmm_fv_hob(fv_hob, sp_load_addr, sp_size):
-    if sp_load_addr is None or sp_size is None:
-        return
-    if fv_hob is not None:
-        print(sp_load_addr, sp_size)
-        #if (fv_hob.base_address != sp_load_addr) and (fv_hob.base_address + fv_hob.length) > (sp_load_addr + sp_size):
-        #    raise Exception("STMM region out of bounds of SP image")
-
 def generate_hob_from_fdt_node(sp_fdt):
     fv_hob = None
     ns_buffer_hob = None
     mmram_reserve_hob = None
+    shared_buf_hob = None
 
     load_address = get_uint32_property_value(sp_fdt, 'load-address')
+    entry_point_offset = get_uint32_property_value(sp_fdt, 'entrypoint-offset')
     img_size = get_uint32_property_value(sp_fdt, 'image-size')
 #   TODO:  boot_info_size = get_pm_offset(sp_node)
     boot_info_size = 0
@@ -250,31 +249,45 @@ def generate_hob_from_fdt_node(sp_fdt):
             granule = 0
         memory_regions = sp_fdt.get_node('memory-regions')
         regions = []
+
+        # OD: reserve FV image memory as first entry
+        regions.append(generate_mmram_desc(0x7003000, 0x300-3, 0, STMM_MMRAM_REGION_STATE_DEFAULT))
+
         for node in memory_regions.nodes:
-            region_state = STMM_MMRAM_REGION_STATE_DEFAULT
             base_addr = get_uint32_property_value(node, 'base-address')
+            #offset = get_uint32_property_value(node, 'load-address-relative-offset')
             page_count = get_uint32_property_value(node, 'pages-count')
 
-            if node.name.strip() == "stmm_region":
-                fv_hob = Firmware_Volume_Hob(base_addr, page_count, granule)
-                check_stmm_fv_hob(fv_hob, load_address, img_size)
-                img_size = fv_hob.length
+            #if node.name.strip() == "stmm_region":
+                #fv_hob = Firmware_Volume_Hob(0x0, page_count, granule)
+                #check_stmm_fv_hob(fv_hob, load_address, img_size)
+                #img_size = fv_hob.length
 
+            region_state = STMM_MMRAM_REGION_STATE_DEFAULT
             if node.name.strip() == "heap":
                 region_state = STMM_MMRAM_REGION_STATE_HEAP
+
             mmram_desc = generate_mmram_desc(base_addr, page_count, granule, region_state)
 
             if node.name.strip() == "ns_comm_buffer":
                 ns_buffer_hob = generate_ns_buffer_guid(mmram_desc)
+
+            if node.name.strip() == "rx-tx-buffers":
+                shared_buf_desc = ("2Q", (base_addr, page_count))
+                shared_buf_hob = generate_shared_buf_guid(shared_buf_desc)
+
             regions.append(mmram_desc)
 
         mmram_reserve_hob = generate_pei_mmram_memory_reserve_guid(regions)
+
+    img_start = load_address + entry_point_offset
+    fv_hob = Firmware_Volume_Hob(img_start, img_size - 3*4096, 0)
 
     #TODO remove
     if img_size is None:
         img_size = 0
 
-    phit = Handoff_Info_Table(load_address, img_size, free_memory_base, max_table_size)
+    phit = Handoff_Info_Table(img_start, img_size, free_memory_base, max_table_size)
     end_hob = End_of_Hoblist_Hob()
     hob_list = HobList("", [])
 
@@ -287,6 +300,8 @@ def generate_hob_from_fdt_node(sp_fdt):
         hob_list.add(ns_buffer_hob)
     if mmram_reserve_hob is not None:
         hob_list.add(mmram_reserve_hob)
+    if shared_buf_hob is not None:
+        hob_list.add(shared_buf_hob)
     if end_hob is not None:
         hob_list.add(end_hob)
 
