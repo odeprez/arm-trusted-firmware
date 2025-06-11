@@ -20,6 +20,7 @@
 #include <lib/el3_runtime/context_mgmt.h>
 #include <lib/fconf/fconf.h>
 #include <lib/fconf/fconf_dyn_cfg_getter.h>
+#include <fconf_hw_config_getter.h>
 #include <lib/smccc.h>
 #include <lib/spinlock.h>
 #include <lib/utils.h>
@@ -522,6 +523,14 @@ static int spmd_spmc_init(void *pm_addr)
 		spmc_ep_info->spsr = SPSR_64(runtime_el,
 					     MODE_SP_ELX,
 					     DISABLE_ALL_EXCEPTIONS);
+	}
+
+	NOTICE("dram_layout.num_banks=%lx\n", dram_layout.num_banks);
+	for (uint32_t bank = 0; bank < dram_layout.num_banks; bank++) {
+		NOTICE("dram_layout.dram_bank[%u]=%lx %lx\n",
+			bank,
+			dram_layout.dram_bank[bank].base,
+			dram_layout.dram_bank[bank].size);
 	}
 
 #if ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31
