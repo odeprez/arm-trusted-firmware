@@ -20,6 +20,7 @@
 #include <lib/el3_runtime/context_mgmt.h>
 #include <lib/fconf/fconf.h>
 #include <lib/fconf/fconf_dyn_cfg_getter.h>
+#include <lib/libfdt/libfdt.h>
 #include <fconf_hw_config_getter.h>
 #include <lib/smccc.h>
 #include <lib/spinlock.h>
@@ -339,7 +340,6 @@ static uint64_t spmd_handle_group0_intr_swd(void *handle)
 		 FFA_PARAM_MBZ);
 }
 
-#if ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31
 static int spmd_dynamic_map_mem(uintptr_t base_addr, size_t size,
 				 unsigned int attr, uintptr_t *align_addr,
 				 size_t *align_size)
@@ -373,6 +373,52 @@ static int spmd_dynamic_map_mem(uintptr_t base_addr, size_t size,
 	return rc;
 }
 
+static void spmd_amend_dram_layout(uintptr_t sec_base_addr,
+			    size_t size)
+{
+	uintptr_t sec_base_addr_align;
+	size_t sec_mapped_size_align;
+	void *fdt = (void*)sec_base_addr;
+	int rc;
+
+	assert(sec_base_addr != 0UL);
+	assert(size != 0UL);
+
+	rc = spmd_dynamic_map_mem(sec_base_addr, size, MT_RW_DATA | MT_SECURE,
+				  &sec_base_addr_align, &sec_mapped_size_align);
+	if (rc != 0) {
+		ERROR("%s %s %lu (%d)\n", "Error while mapping",
+		      "secure region", sec_base_addr, rc);
+		panic();
+	}
+
+	rc = fdt_node_offset_by_compatible(fdt, -1,
+				"arm,ffa-core-manifest-1.0");
+	if (rc < 0) {
+		ERROR("Unrecognized SPM Core manifest\n");
+		panic();
+	}
+
+	int node = fdt_subnode_offset_namelen(fdt, rc, "memory",
+		sizeof("memory") - 1);
+	if (node < 0) {
+		ERROR("Missing memory node.\n");
+		panic();
+	}
+
+	/* TODO: fdt write dram layout to spmc manifest */
+
+	/* Unmap secure memory region */
+	rc = mmap_remove_dynamic_region(sec_base_addr_align,
+					sec_mapped_size_align);
+	if (rc != 0) {
+		ERROR("%s %s %lu (%d)\n", "Error while unmapping",
+		      "secure region", sec_base_addr_align, rc);
+		panic();
+	}
+}
+
+#if ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31
 static void spmd_do_sec_cpy(uintptr_t root_base_addr, uintptr_t sec_base_addr,
 			    size_t size)
 {
@@ -533,7 +579,6 @@ static int spmd_spmc_init(void *pm_addr)
 			dram_layout.dram_bank[bank].size);
 	}
 
-#if ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31
 	image_info = FCONF_GET_PROPERTY(dyn_cfg, dtb, TOS_FW_CONFIG_ID);
 	assert(image_info != NULL);
 
@@ -543,6 +588,7 @@ static int spmd_spmc_init(void *pm_addr)
 		return -EINVAL;
 	}
 
+#if ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31
 	/* Copy manifest from root->secure region */
 	spmd_do_sec_cpy(image_info->config_addr,
 			image_info->secondary_config_addr,
@@ -552,6 +598,13 @@ static int spmd_spmc_init(void *pm_addr)
 	assert(spmc_ep_info != NULL);
 	spmc_ep_info->args.arg0 = image_info->secondary_config_addr;
 #endif /* ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31 */
+
+#if ENABLE_RME && SPMD_SPM_AT_SEL2 && !RESET_TO_BL31
+	spmd_amend_dram_layout(image_info->secondary_config_addr,
+#else
+	spmd_amend_dram_layout(image_info->config_addr,
+#endif
+		image_info->config_max_size);
 
 	/* Set an initial SPMC context state for all cores. */
 	for (core_id = 0U; core_id < PLATFORM_CORE_COUNT; core_id++) {
